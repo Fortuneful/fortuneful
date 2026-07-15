@@ -6,7 +6,7 @@ import {
   Globe, Users, UserRound, CreditCard, Settings, Sparkles, ArrowRight,
   Check, ChevronRight, Sun, Moon, Zap, TrendingUp, Clock, X, Plug,
   Star, PhoneCall, MessageSquare, Download, Search, Camera, Loader2, Plus, Pencil,
-  Send, Square
+  Send, Square, Puzzle
 } from "lucide-react";
 
 /* ================= DESIGN TOKENS ================= */
@@ -181,6 +181,7 @@ const NAV = [
   { icon: UserRound, label: "Staff" },
   { icon: CreditCard, label: "Payments" },
   { icon: Plug, label: "Shop" },
+  { icon: Puzzle, label: "Integrations" },
 ];
 
 /* ================= PRIMITIVES ================= */
@@ -430,6 +431,40 @@ export default function FortunefulDashboard() {
       fortAbortRef.current = null;
     }
   };
+  const [integrations, setIntegrations] = useState([]);
+  const [integrationsQuery, setIntegrationsQuery] = useState("");
+  const [integrationsCursor, setIntegrationsCursor] = useState(null);
+  const [integrationsTotal, setIntegrationsTotal] = useState(null);
+  const [integrationsLoading, setIntegrationsLoading] = useState(false);
+  const [integrationsLoaded, setIntegrationsLoaded] = useState(false);
+
+  const fetchIntegrations = async ({ reset = false, cursor = null, query = integrationsQuery } = {}) => {
+    setIntegrationsLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (query) params.set("search", query);
+      if (cursor) params.set("cursor", cursor);
+      const res = await fetch(`/api/integrations?${params.toString()}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error();
+      setIntegrations((prev) => (reset ? data.items : [...prev, ...data.items]));
+      setIntegrationsCursor(data.nextCursor);
+      setIntegrationsTotal(data.totalItems);
+    } catch {
+      if (reset) setIntegrations([]);
+    } finally {
+      setIntegrationsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (active !== "Integrations" || integrationsLoaded) return;
+    setIntegrationsLoaded(true);
+    fetchIntegrations({ reset: true });
+  }, [active, integrationsLoaded]);
+
+  const runIntegrationsSearch = () => fetchIntegrations({ reset: true, cursor: null });
+
   const [forms, setForms] = useState({
     website: { type: "Copy edit", details: "" },
     social: { platform: "Instagram", occasion: "", notes: "" },
@@ -1351,6 +1386,65 @@ export default function FortunefulDashboard() {
                 </Card>
               ))}
             </div>
+          </div>
+        ) : active === "Integrations" ? (
+          <div className="rise">
+            <header>
+              <h1 style={{ fontFamily: "'Instrument Serif', serif", fontStyle: "italic", fontWeight: 400, fontSize: 32, margin: 0 }}>Integrations</h1>
+              <p style={{ color: t.sub, marginTop: 4, fontSize: 14 }}>
+                Connect your favorite tools{integrationsTotal ? ` — ${integrationsTotal.toLocaleString()} and counting` : ""}.
+              </p>
+            </header>
+
+            <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
+              <input
+                style={{ ...inputStyle(t), flex: 1 }}
+                placeholder="Search integrations…"
+                value={integrationsQuery}
+                onChange={(e) => setIntegrationsQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") runIntegrationsSearch(); }}
+              />
+              <Btn t={t} primary onClick={runIntegrationsSearch}><Search size={14} /> Search</Btn>
+            </div>
+
+            {integrationsLoading && integrations.length === 0 ? (
+              <p style={{ color: t.sub, fontSize: 13.5, marginTop: 24 }}>Loading integrations…</p>
+            ) : integrations.length === 0 ? (
+              <p style={{ color: t.sub, fontSize: 13.5, marginTop: 24 }}>No integrations match "{integrationsQuery}".</p>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 12, marginTop: 20 }}>
+                {integrations.map((it) => (
+                  <Card t={t} key={it.slug} hover style={{ padding: "16px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      {it.logo ? (
+                        <img src={it.logo} alt="" width={28} height={28}
+                          style={{ borderRadius: 7, objectFit: "contain", background: t.raised, flexShrink: 0 }}
+                          onError={(e) => { e.currentTarget.style.display = "none"; }} />
+                      ) : (
+                        <div style={{ width: 28, height: 28, borderRadius: 7, background: t.raised, flexShrink: 0 }} />
+                      )}
+                      <div style={{ fontWeight: 700, fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</div>
+                    </div>
+                    <p style={{
+                      fontSize: 12, color: t.sub, margin: 0, minHeight: 30,
+                      display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden",
+                    }}>{it.description}</p>
+                    <div style={{ marginTop: "auto", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                      <Badge t={t} tone="muted">{it.category || "App"}</Badge>
+                      <Badge t={t} tone="muted">Coming soon</Badge>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            )}
+
+            {integrationsCursor && (
+              <div style={{ display: "flex", justifyContent: "center", marginTop: 20 }}>
+                <Btn t={t} ghost onClick={() => fetchIntegrations({ cursor: integrationsCursor })} disabled={integrationsLoading}>
+                  {integrationsLoading ? "Loading…" : "Load more"}
+                </Btn>
+              </div>
+            )}
           </div>
         ) : active === "Fort" ? (
           <div className="rise" style={{ display: "flex", flexDirection: "column", height: isMobile ? "calc(100vh - 160px)" : "calc(100vh - 120px)" }}>
