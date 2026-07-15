@@ -266,6 +266,22 @@ export default function FortunefulDashboard() {
   const [menuData, setMenuData] = useState(extractedMenu);
   const [offItems, setOffItems] = useState([]);
   const [requests, setRequests] = useState(requestLog);
+  const [biz, setBiz] = useState(BIZ);
+
+  // Load the signed-in user's business (when auth is set up).
+  // 404 = signed in but hasn't onboarded -> send to onboarding.
+  // Any other failure (no auth installed yet) -> keep the default quietly.
+  useEffect(() => {
+    fetch("/api/business")
+      .then((r) => {
+        if (r.status === 404) { window.location.href = "/onboarding"; return null; }
+        return r.ok ? r.json() : null;
+      })
+      .then((b) => {
+        if (b && b.name) setBiz({ name: b.name, owner: (b.owner_name || "").split(" ")[0] || "there", plan: "Founder" });
+      })
+      .catch(() => {});
+  }, []);
   const [staff, setStaff] = useState(staffSeed);
   const [forms, setForms] = useState({
     website: { type: "Copy edit", details: "" },
@@ -390,7 +406,7 @@ export default function FortunefulDashboard() {
             }}>F</div>
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 700, fontSize: 13.5 }}>Fortuneful</div>
-              <div style={{ fontSize: 10.5, color: t.muted, fontFamily: "'JetBrains Mono', monospace" }}>{BIZ.name}</div>
+              <div style={{ fontSize: 10.5, color: t.muted, fontFamily: "'JetBrains Mono', monospace" }}>{biz.name}</div>
             </div>
             <button onClick={() => setMode(mode === "dark" ? "light" : "dark")} aria-label="Toggle theme"
               style={{ background: "none", border: "none", color: t.sub, cursor: "pointer", padding: 6 }}>
@@ -434,7 +450,7 @@ export default function FortunefulDashboard() {
           }}>F</div>
           <div>
             <div style={{ fontWeight: 700, fontSize: 13.5, letterSpacing: "-0.01em" }}>Fortuneful</div>
-            <div style={{ fontSize: 11, color: t.muted, fontFamily: "'JetBrains Mono', monospace" }}>{BIZ.name}</div>
+            <div style={{ fontSize: 11, color: t.muted, fontFamily: "'JetBrains Mono', monospace" }}>{biz.name}</div>
           </div>
         </div>
 
@@ -489,10 +505,10 @@ export default function FortunefulDashboard() {
                   fontFamily: "'Instrument Serif', serif", fontStyle: "italic",
                   fontWeight: 400, fontSize: 34, letterSpacing: "-0.01em", margin: 0,
                 }}>
-                  Good evening, {BIZ.owner}.
+                  Good evening, {biz.owner}.
                 </h1>
                 <p style={{ color: t.sub, marginTop: 6, fontSize: 14.5 }}>
-                  {BIZ.name} made{" "}
+                  {biz.name} made{" "}
                   <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: t.green }}>
                     ${weekTotal.toLocaleString()}
                   </span>{" "}
