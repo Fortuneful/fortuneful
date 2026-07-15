@@ -35,7 +35,16 @@ const theme = {
 };
 
 /* ================= MOCK DATA ================= */
-const BIZ = { name: "Chung Fa", owner: "Ali", plan: "Founder" };
+const BIZ = { name: "Chung Fa", owner: "Ali", plan: "Founder", business_type: "Restaurant" };
+
+const FORT_SUGGESTIONS = {
+  "Restaurant": ["Write 3 caption ideas for this week's specials", "Suggest a slow-Tuesday promo", "Draft a reply to a mixed review"],
+  "Retail / E-commerce": ["Plan a launch-week social calendar", "Draft product descriptions", "Suggest a bundle promo idea"],
+  "Beauty & Fragrance": ["Draft an Instagram caption for a new scent drop", "Suggest a referral promo", "Plan a restock announcement"],
+  "Health & Supplements": ["Draft an educational post about a product benefit", "Suggest a first-time-customer offer", "Plan a subscription push"],
+  "Services": ["Draft a testimonial request message", "Suggest a slow-season promo", "Plan a referral incentive"],
+  "Other": ["Brainstorm a promo idea for this month", "Draft a social caption", "Suggest one quick win for this week"],
+};
 
 const revenueWeek = [
   { d: "Wed", v: 412 }, { d: "Thu", v: 388 }, { d: "Fri", v: 545 },
@@ -161,6 +170,7 @@ const extractedMenu = [
 
 const NAV = [
   { icon: Home, label: "Home" },
+  { icon: Sparkles, label: "Fort" },
   { icon: ReceiptText, label: "Orders" },
   { icon: BookOpen, label: "Menu" },
   { icon: Globe, label: "Website" },
@@ -278,11 +288,52 @@ export default function FortunefulDashboard() {
         return r.ok ? r.json() : null;
       })
       .then((b) => {
-        if (b && b.name) setBiz({ name: b.name, owner: (b.owner_name || "").split(" ")[0] || "there", plan: "Founder" });
+        if (b && b.name) setBiz({ name: b.name, owner: (b.owner_name || "").split(" ")[0] || "there", plan: "Founder", business_type: b.business_type || "Restaurant" });
       })
       .catch(() => {});
   }, []);
   const [staff, setStaff] = useState(staffSeed);
+  const [fortMessages, setFortMessages] = useState([]);
+  const [fortInput, setFortInput] = useState("");
+  const [fortLoading, setFortLoading] = useState(false);
+  const [fortHistoryLoaded, setFortHistoryLoaded] = useState(false);
+
+  useEffect(() => {
+    if (active !== "Fort" || fortHistoryLoaded) return;
+    setFortHistoryLoaded(true);
+    fetch("/api/fort")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows) => { if (Array.isArray(rows)) setFortMessages(rows); })
+      .catch(() => {});
+  }, [active, fortHistoryLoaded]);
+
+  const sendFort = async () => {
+    const text = fortInput.trim();
+    if (!text || fortLoading) return;
+    setFortInput("");
+    setFortMessages((prev) => [...prev, { role: "user", content: text }]);
+    setFortLoading(true);
+    try {
+      const res = await fetch("/api/fort", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Fort couldn't respond");
+      setFortMessages((prev) => [...prev, { role: "assistant", content: data.reply, filedRequests: data.filedRequests || [] }]);
+      if (data.filedRequests && data.filedRequests.length) {
+        setRequests((prev) => [
+          ...data.filedRequests.map((r) => ({ id: r.id, title: r.title, type: r.type, status: r.status, when: "Just now" })),
+          ...prev,
+        ]);
+      }
+    } catch {
+      setFortMessages((prev) => [...prev, { role: "assistant", content: "Sorry — something went wrong. Try again in a moment." }]);
+    } finally {
+      setFortLoading(false);
+    }
+  };
   const [forms, setForms] = useState({
     website: { type: "Copy edit", details: "" },
     social: { platform: "Instagram", occasion: "", notes: "" },
@@ -1204,6 +1255,70 @@ export default function FortunefulDashboard() {
                 </Card>
               ))}
             </div>
+          </div>
+        ) : active === "Fort" ? (
+          <div className="rise" style={{ display: "flex", flexDirection: "column", height: isMobile ? "calc(100vh - 160px)" : "calc(100vh - 120px)" }}>
+            <header style={{ marginBottom: 14 }}>
+              <h1 style={{ fontFamily: "'Instrument Serif', serif", fontStyle: "italic", fontWeight: 400, fontSize: 32, margin: 0 }}>Fort</h1>
+              <p style={{ color: t.sub, marginTop: 4, fontSize: 14 }}>Your on-demand growth strategist.</p>
+            </header>
+
+            <Card t={t} style={{ flex: 1, display: "flex", flexDirection: "column", padding: "18px 20px", overflow: "hidden" }}>
+              <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 14 }}>
+                {fortMessages.length === 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    <div style={{ alignSelf: "flex-start", maxWidth: "85%", background: t.raised, border: `1px solid ${t.border}`, borderRadius: 12, padding: "10px 14px", fontSize: 13.5 }}>
+                      Hey {biz.owner}, I'm Fort — your growth strategist for {biz.name}. Here's a few things I can help with:
+                    </div>
+                    {(FORT_SUGGESTIONS[biz.business_type] || FORT_SUGGESTIONS["Other"]).map((s) => (
+                      <button key={s} onClick={() => setFortInput(s)} style={{
+                        alignSelf: "flex-start", textAlign: "left", padding: "8px 12px", borderRadius: 9, cursor: "pointer",
+                        border: `1px solid ${t.border}`, background: "transparent", color: t.gold, fontWeight: 600, fontSize: 12.5, fontFamily: "Inter, sans-serif",
+                      }}>{s}</button>
+                    ))}
+                  </div>
+                )}
+
+                {fortMessages.map((m, i) => (
+                  <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: m.role === "user" ? "flex-end" : "flex-start", gap: 8 }}>
+                    <div style={{
+                      maxWidth: "85%", borderRadius: 12, padding: "10px 14px", fontSize: 13.5, whiteSpace: "pre-wrap",
+                      background: m.role === "user" ? t.goldSoft : t.raised,
+                      color: m.role === "user" ? t.gold : t.text,
+                      border: `1px solid ${m.role === "user" ? "transparent" : t.border}`,
+                    }}>
+                      {m.content}
+                    </div>
+                    {m.filedRequests && m.filedRequests.map((r) => (
+                      <div key={r.id} style={{
+                        maxWidth: "85%", borderRadius: 10, padding: "8px 12px", fontSize: 12.5, fontWeight: 600,
+                        background: t.goldSoft, color: t.gold, border: `1px solid ${t.gold}`,
+                      }}>
+                        Filed: {r.title} — the team is on it
+                      </div>
+                    ))}
+                  </div>
+                ))}
+
+                {fortLoading && (
+                  <div style={{ alignSelf: "flex-start", display: "flex", alignItems: "center", gap: 8, color: t.sub, fontSize: 12.5 }}>
+                    <Loader2 size={14} className="spin" /> Fort is thinking…
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: "flex", gap: 8, marginTop: 14, borderTop: `1px solid ${t.border}`, paddingTop: 14 }}>
+                <input
+                  style={{ ...inputStyle(t), flex: 1 }}
+                  placeholder="Ask Fort anything, or describe what you need done…"
+                  value={fortInput}
+                  onChange={(e) => setFortInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendFort(); } }}
+                  disabled={fortLoading}
+                />
+                <Btn t={t} primary onClick={sendFort}>Send</Btn>
+              </div>
+            </Card>
           </div>
         ) : (
           /* ===== Stub pages ===== */
