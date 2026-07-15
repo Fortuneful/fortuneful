@@ -1404,7 +1404,7 @@ export default function FortunefulDashboard() {
                 onChange={(e) => setIntegrationsQuery(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") runIntegrationsSearch(); }}
               />
-              <Btn t={t} primary onClick={runIntegrationsSearch}><Search size={14} /> Search</Btn>
+              <Btn t={t} primary small onClick={runIntegrationsSearch}><Search size={13} /> Search</Btn>
             </div>
 
             {integrationsLoading && integrations.length === 0 ? (
@@ -1412,9 +1412,9 @@ export default function FortunefulDashboard() {
             ) : integrations.length === 0 ? (
               <p style={{ color: t.sub, fontSize: 13.5, marginTop: 24 }}>No integrations match "{integrationsQuery}".</p>
             ) : (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 12, marginTop: 20 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12, marginTop: 20 }}>
                 {integrations.map((it) => (
-                  <Card t={t} key={it.slug} hover style={{ padding: "16px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+                  <Card t={t} key={it.slug} hover style={{ padding: "16px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       {it.logo ? (
                         <img src={it.logo} alt="" width={28} height={28}
@@ -1429,8 +1429,12 @@ export default function FortunefulDashboard() {
                       fontSize: 12, color: t.sub, margin: 0, minHeight: 30,
                       display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden",
                     }}>{it.description}</p>
-                    <div style={{ marginTop: "auto", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
-                      <Badge t={t} tone="muted">{it.category || "App"}</Badge>
+                    <div style={{ marginTop: "auto", display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                      <Badge t={t} tone="muted">
+                        <span style={{ display: "inline-block", maxWidth: 90, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", verticalAlign: "bottom" }}>
+                          {it.category || "App"}
+                        </span>
+                      </Badge>
                       <Badge t={t} tone="muted">Coming soon</Badge>
                     </div>
                   </Card>
@@ -1440,7 +1444,7 @@ export default function FortunefulDashboard() {
 
             {integrationsCursor && (
               <div style={{ display: "flex", justifyContent: "center", marginTop: 20 }}>
-                <Btn t={t} ghost onClick={() => fetchIntegrations({ cursor: integrationsCursor })} disabled={integrationsLoading}>
+                <Btn t={t} ghost small onClick={() => fetchIntegrations({ cursor: integrationsCursor })} disabled={integrationsLoading}>
                   {integrationsLoading ? "Loading…" : "Load more"}
                 </Btn>
               </div>
