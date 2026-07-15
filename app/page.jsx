@@ -1,11 +1,12 @@
 'use client';
 
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   Home, ReceiptText, BookOpen, BarChart3, Megaphone,
   Globe, Users, UserRound, CreditCard, Settings, Sparkles, ArrowRight,
   Check, ChevronRight, Sun, Moon, Zap, TrendingUp, Clock, X, Plug,
-  Star, PhoneCall, MessageSquare, Download, Search, Camera, Loader2, Plus, Pencil
+  Star, PhoneCall, MessageSquare, Download, Search, Camera, Loader2, Plus, Pencil,
+  Send, Square
 } from "lucide-react";
 
 /* ================= DESIGN TOKENS ================= */
@@ -244,6 +245,20 @@ const inputStyle = (t) => ({
   padding: "9px 12px", color: t.text, fontFamily: "Inter, sans-serif", fontSize: 13.5, outline: "none",
 });
 
+const updateStreamingFortMessage = (arr, updater) => {
+  const fromEnd = [...arr].reverse().findIndex((m) => m.streaming);
+  if (fromEnd === -1) return arr;
+  const idx = arr.length - 1 - fromEnd;
+  const next = [...arr];
+  next[idx] = updater(next[idx]);
+  return next;
+};
+
+const fortTime = (iso) => {
+  if (!iso) return "";
+  return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+};
+
 const Spark = ({ t, data }) => {
   const max = Math.max(...data.map((d) => d.v), 1);
   const pts = data.map((d, i) => `${(i / (data.length - 1)) * 100},${36 - (d.v / max) * 32}`).join(" ");
@@ -295,43 +310,124 @@ export default function FortunefulDashboard() {
   const [staff, setStaff] = useState(staffSeed);
   const [fortMessages, setFortMessages] = useState([]);
   const [fortInput, setFortInput] = useState("");
-  const [fortLoading, setFortLoading] = useState(false);
+  const [fortStreaming, setFortStreaming] = useState(false);
   const [fortHistoryLoaded, setFortHistoryLoaded] = useState(false);
+  const [, setFortTick] = useState(0);
+  const fortAbortRef = useRef(null);
+
+  // Re-render every second while a message is streaming, so the elapsed-seconds counter updates.
+  useEffect(() => {
+    if (!fortStreaming) return;
+    const id = setInterval(() => setFortTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [fortStreaming]);
 
   useEffect(() => {
     if (active !== "Fort" || fortHistoryLoaded) return;
     setFortHistoryLoaded(true);
     fetch("/api/fort")
       .then((r) => (r.ok ? r.json() : []))
-      .then((rows) => { if (Array.isArray(rows)) setFortMessages(rows); })
+      .then((rows) => {
+        if (Array.isArray(rows)) {
+          setFortMessages(rows.map((m) => ({ role: m.role, content: m.content, steps: [], createdAt: m.created_at })));
+        }
+      })
       .catch(() => {});
   }, [active, fortHistoryLoaded]);
 
-  const sendFort = async () => {
-    const text = fortInput.trim();
-    if (!text || fortLoading) return;
+  const toggleFortStep = (msgIndex, stepIndex) => {
+    setFortMessages((prev) => prev.map((m, i) => {
+      if (i !== msgIndex) return m;
+      return { ...m, steps: m.steps.map((s, j) => (j === stepIndex ? { ...s, expanded: !s.expanded } : s)) };
+    }));
+  };
+
+  const stopFort = () => fortAbortRef.current?.abort();
+
+  const applyFortEvent = (evt) => {
+    if (evt.type === "text_delta") {
+      setFortMessages((prev) => updateStreamingFortMessage(prev, (m) => ({ ...m, content: m.content + evt.text })));
+    } else if (evt.type === "tool_step") {
+      setFortMessages((prev) => updateStreamingFortMessage(prev, (m) => {
+        const steps = [...m.steps];
+        if (evt.status === "start") {
+          steps.push({ tool: evt.tool, status: "start", input: evt.input, expanded: false });
+        } else {
+          const revIdx = [...steps].reverse().findIndex((s) => s.tool === evt.tool && s.status === "start");
+          if (revIdx !== -1) {
+            const idx = steps.length - 1 - revIdx;
+            steps[idx] = { ...steps[idx], status: "done", result: evt.result };
+          }
+        }
+        return { ...m, steps };
+      }));
+    } else if (evt.type === "done") {
+      setFortMessages((prev) => updateStreamingFortMessage(prev, (m) => ({
+        ...m, content: evt.reply || m.content, streaming: false, completedAt: Date.now(),
+      })));
+      if (evt.filedRequests && evt.filedRequests.length) {
+        setRequests((prev) => [
+          ...evt.filedRequests.map((r) => ({ id: r.id, title: r.title, type: r.type, status: r.status, when: "Just now" })),
+          ...prev,
+        ]);
+      }
+    } else if (evt.type === "error") {
+      setFortMessages((prev) => updateStreamingFortMessage(prev, (m) => ({
+        ...m, content: m.content || evt.message || "Sorry — something went wrong.", streaming: false, completedAt: Date.now(),
+      })));
+    }
+  };
+
+  const sendFort = async (textOverride) => {
+    const text = (textOverride ?? fortInput).trim();
+    if (!text || fortStreaming) return;
     setFortInput("");
-    setFortMessages((prev) => [...prev, { role: "user", content: text }]);
-    setFortLoading(true);
+    setFortMessages((prev) => [
+      ...prev,
+      { role: "user", content: text },
+      { role: "assistant", content: "", steps: [], streaming: true, startedAt: Date.now(), completedAt: null },
+    ]);
+    setFortStreaming(true);
+
+    const controller = new AbortController();
+    fortAbortRef.current = controller;
+
     try {
       const res = await fetch("/api/fort", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text }),
+        signal: controller.signal,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Fort couldn't respond");
-      setFortMessages((prev) => [...prev, { role: "assistant", content: data.reply, filedRequests: data.filedRequests || [] }]);
-      if (data.filedRequests && data.filedRequests.length) {
-        setRequests((prev) => [
-          ...data.filedRequests.map((r) => ({ id: r.id, title: r.title, type: r.type, status: r.status, when: "Just now" })),
-          ...prev,
-        ]);
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Fort couldn't respond");
       }
-    } catch {
-      setFortMessages((prev) => [...prev, { role: "assistant", content: "Sorry — something went wrong. Try again in a moment." }]);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try { applyFortEvent(JSON.parse(line)); } catch {}
+        }
+      }
+    } catch (err) {
+      setFortMessages((prev) => updateStreamingFortMessage(prev, (m) => ({
+        ...m,
+        content: m.content || (err.name === "AbortError" ? "" : "Sorry — something went wrong. Try again in a moment."),
+        streaming: false,
+        completedAt: Date.now(),
+      })));
     } finally {
-      setFortLoading(false);
+      setFortStreaming(false);
+      fortAbortRef.current = null;
     }
   };
   const [forms, setForms] = useState({
@@ -1258,65 +1354,113 @@ export default function FortunefulDashboard() {
           </div>
         ) : active === "Fort" ? (
           <div className="rise" style={{ display: "flex", flexDirection: "column", height: isMobile ? "calc(100vh - 160px)" : "calc(100vh - 120px)" }}>
-            <header style={{ marginBottom: 14 }}>
-              <h1 style={{ fontFamily: "'Instrument Serif', serif", fontStyle: "italic", fontWeight: 400, fontSize: 32, margin: 0 }}>Fort</h1>
-              <p style={{ color: t.sub, marginTop: 4, fontSize: 14 }}>Your on-demand growth strategist.</p>
-            </header>
+            <div style={{ flex: 1, overflowY: "auto" }}>
+              <div style={{ maxWidth: 760, width: "100%", margin: "0 auto", padding: isMobile ? "12px 4px 20px" : "20px 12px 28px", display: "flex", flexDirection: "column", gap: 22, minHeight: "100%" }}>
 
-            <Card t={t} style={{ flex: 1, display: "flex", flexDirection: "column", padding: "18px 20px", overflow: "hidden" }}>
-              <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 14 }}>
                 {fortMessages.length === 0 && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    <div style={{ alignSelf: "flex-start", maxWidth: "85%", background: t.raised, border: `1px solid ${t.border}`, borderRadius: 12, padding: "10px 14px", fontSize: 13.5 }}>
-                      Hey {biz.owner}, I'm Fort — your growth strategist for {biz.name}. Here's a few things I can help with:
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: 14, marginTop: isMobile ? 20 : 56 }}>
+                    <div style={{ width: 38, height: 38, borderRadius: 11, background: t.gold, display: "grid", placeItems: "center", color: "#141419", fontWeight: 800, fontFamily: "'Instrument Serif', serif", fontSize: 21, fontStyle: "italic" }}>F</div>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 16.5 }}>Hey {biz.owner}, this is Fort.</div>
+                      <p style={{ color: t.sub, fontSize: 13, margin: "4px 0 0" }}>Your growth strategist for {biz.name}. Try one of these, or ask me anything.</p>
                     </div>
-                    {(FORT_SUGGESTIONS[biz.business_type] || FORT_SUGGESTIONS["Other"]).map((s) => (
-                      <button key={s} onClick={() => setFortInput(s)} style={{
-                        alignSelf: "flex-start", textAlign: "left", padding: "8px 12px", borderRadius: 9, cursor: "pointer",
-                        border: `1px solid ${t.border}`, background: "transparent", color: t.gold, fontWeight: 600, fontSize: 12.5, fontFamily: "Inter, sans-serif",
-                      }}>{s}</button>
-                    ))}
+                    <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 8, maxWidth: 480 }}>
+                      {(FORT_SUGGESTIONS[biz.business_type] || FORT_SUGGESTIONS["Other"]).map((s) => (
+                        <button key={s} onClick={() => setFortInput(s)} style={{
+                          padding: "8px 14px", borderRadius: 999, cursor: "pointer",
+                          border: `1px solid ${t.border}`, background: t.raised, color: t.text,
+                          fontWeight: 600, fontSize: 12.5, fontFamily: "Inter, sans-serif",
+                        }}>{s}</button>
+                      ))}
+                    </div>
                   </div>
                 )}
 
-                {fortMessages.map((m, i) => (
-                  <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: m.role === "user" ? "flex-end" : "flex-start", gap: 8 }}>
-                    <div style={{
-                      maxWidth: "85%", borderRadius: 12, padding: "10px 14px", fontSize: 13.5, whiteSpace: "pre-wrap",
-                      background: m.role === "user" ? t.goldSoft : t.raised,
-                      color: m.role === "user" ? t.gold : t.text,
-                      border: `1px solid ${m.role === "user" ? "transparent" : t.border}`,
-                    }}>
+                {fortMessages.map((m, i) => m.role === "user" ? (
+                  <div key={i} style={{ display: "flex", justifyContent: "flex-end" }}>
+                    <div style={{ maxWidth: "80%", borderRadius: 14, padding: "9px 14px", fontSize: 13.5, whiteSpace: "pre-wrap", background: t.raised, border: `1px solid ${t.border}`, color: t.text }}>
                       {m.content}
                     </div>
-                    {m.filedRequests && m.filedRequests.map((r) => (
-                      <div key={r.id} style={{
-                        maxWidth: "85%", borderRadius: 10, padding: "8px 12px", fontSize: 12.5, fontWeight: 600,
-                        background: t.goldSoft, color: t.gold, border: `1px solid ${t.gold}`,
-                      }}>
-                        Filed: {r.title} — the team is on it
+                  </div>
+                ) : (
+                  <div key={i} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                      <div style={{ width: 18, height: 18, borderRadius: 6, background: t.gold, display: "grid", placeItems: "center", color: "#141419", fontWeight: 800, fontFamily: "'Instrument Serif', serif", fontSize: 12, fontStyle: "italic", flexShrink: 0 }}>F</div>
+                      <span style={{ fontWeight: 700, color: t.sub }}>Fort</span>
+                      {m.streaming ? (
+                        <>
+                          <span style={{ fontFamily: "'JetBrains Mono', monospace", color: t.muted }}>{Math.max(0, Math.round((Date.now() - m.startedAt) / 1000))}s</span>
+                          <span style={{ color: t.muted }}>working…</span>
+                        </>
+                      ) : (
+                        <span style={{ color: t.muted }}>{fortTime(m.completedAt || m.createdAt)}</span>
+                      )}
+                    </div>
+
+                    {m.steps && m.steps.length > 0 && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 2, paddingLeft: 26 }}>
+                        {m.steps.map((s, si) => (
+                          <div key={si}>
+                            <button onClick={() => toggleFortStep(i, si)} style={{
+                              display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", cursor: "pointer",
+                              color: t.sub, fontSize: 12.5, fontFamily: "Inter, sans-serif", padding: "3px 0",
+                            }}>
+                              <ChevronRight size={12} style={{ transform: s.expanded ? "rotate(90deg)" : "none", transition: "transform .15s ease", flexShrink: 0 }} />
+                              {s.status === "start" ? "Filing request" : "Filed request"}: {s.input?.title}
+                            </button>
+                            {s.expanded && (
+                              <div style={{ paddingLeft: 18, fontSize: 12, color: t.muted, marginBottom: 4 }}>
+                                Type: {s.input?.type}{s.result ? ` · #${s.result.id} · ${s.result.status}` : ""}
+                              </div>
+                            )}
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    )}
+
+                    {m.content && (
+                      <div style={{ fontSize: 13.5, lineHeight: 1.6, whiteSpace: "pre-wrap", color: t.text, paddingLeft: 26 }}>
+                        {m.content}
+                      </div>
+                    )}
                   </div>
                 ))}
 
-                {fortLoading && (
-                  <div style={{ alignSelf: "flex-start", display: "flex", alignItems: "center", gap: 8, color: t.sub, fontSize: 12.5 }}>
-                    <Loader2 size={14} className="spin" /> Fort is thinking…
+                {fortStreaming && fortMessages.length > 0 && (() => {
+                  const last = fortMessages[fortMessages.length - 1];
+                  return last.streaming && !last.content && (!last.steps || last.steps.length === 0);
+                })() && (
+                  <div style={{ display: "flex", justifyContent: "center" }}>
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 14px", borderRadius: 999, background: t.goldSoft, color: t.gold, fontSize: 12.5, fontWeight: 600 }}>
+                      <Loader2 size={13} className="spin" /> Fort is working
+                    </div>
                   </div>
                 )}
               </div>
+            </div>
 
-              <div style={{ display: "flex", gap: 8, marginTop: 14, borderTop: `1px solid ${t.border}`, paddingTop: 14 }}>
+            <Card t={t} style={{ maxWidth: 760, width: "100%", margin: "0 auto", padding: "12px 16px", flexShrink: 0 }}>
+              <div style={{ fontSize: 11.5, fontWeight: 600, color: t.muted, marginBottom: 8 }}>Fort — your on-demand growth team</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button title="Attach (coming soon)" style={{
+                  width: 30, height: 30, borderRadius: 9, display: "grid", placeItems: "center", flexShrink: 0,
+                  border: `1px solid ${t.border}`, background: "transparent", color: t.muted, cursor: "pointer",
+                }}>
+                  <Plus size={15} />
+                </button>
                 <input
-                  style={{ ...inputStyle(t), flex: 1 }}
+                  style={{ ...inputStyle(t), flex: 1, border: "none", background: "transparent", padding: "6px 2px" }}
                   placeholder="Ask Fort anything, or describe what you need done…"
                   value={fortInput}
                   onChange={(e) => setFortInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendFort(); } }}
-                  disabled={fortLoading}
+                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !fortStreaming) { e.preventDefault(); sendFort(); } }}
                 />
-                <Btn t={t} primary onClick={sendFort}>Send</Btn>
+                <button onClick={fortStreaming ? stopFort : () => sendFort()} style={{
+                  width: 32, height: 32, borderRadius: 9, display: "grid", placeItems: "center", flexShrink: 0, cursor: "pointer",
+                  border: "none", background: t.gold, color: "#141419",
+                }}>
+                  {fortStreaming ? <Square size={14} fill="#141419" /> : <Send size={15} />}
+                </button>
               </div>
             </Card>
           </div>

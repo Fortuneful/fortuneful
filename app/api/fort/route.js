@@ -66,113 +66,126 @@ export async function GET() {
 }
 
 export async function POST(req) {
-  try {
-    const { userId } = await auth();
-    if (!userId) return Response.json({ error: "Not signed in" }, { status: 401 });
+  const { userId } = await auth();
+  if (!userId) return Response.json({ error: "Not signed in" }, { status: 401 });
 
-    const body = await req.json();
-    const userMessage = (body.message || "").trim().slice(0, 4000);
-    if (!userMessage) return Response.json({ error: "Missing message" }, { status: 400 });
+  const body = await req.json();
+  const userMessage = (body.message || "").trim().slice(0, 4000);
+  if (!userMessage) return Response.json({ error: "Missing message" }, { status: 400 });
 
-    const sql = neon(process.env.DATABASE_URL);
-    const biz = await getBusiness(sql, userId);
-    if (!biz) return Response.json({ error: "Finish onboarding first" }, { status: 400 });
+  const sql = neon(process.env.DATABASE_URL);
+  const biz = await getBusiness(sql, userId);
+  if (!biz) return Response.json({ error: "Finish onboarding first" }, { status: 400 });
 
-    const historyRows = await sql`
-      SELECT role, content FROM fort_messages
-      WHERE business_id = ${String(biz.id)}
-      ORDER BY created_at DESC
-      LIMIT 30
-    `;
-    const history = historyRows.reverse();
+  const encoder = new TextEncoder();
 
-    const recentRequests = await sql`
-      SELECT title, type, status FROM requests
-      WHERE business = ${String(biz.id)}
-      ORDER BY created_at DESC
-      LIMIT 10
-    `;
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (obj) => controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
 
-    const system = buildSystemPrompt(biz, recentRequests);
-    const messages = [
-      ...history.map((m) => ({ role: m.role, content: m.content })),
-      { role: "user", content: userMessage },
-    ];
+      try {
+        const historyRows = await sql`
+          SELECT role, content FROM fort_messages
+          WHERE business_id = ${String(biz.id)}
+          ORDER BY created_at DESC
+          LIMIT 30
+        `;
+        const history = historyRows.reverse();
 
-    const client = new Anthropic();
-    const filedRequests = [];
+        const recentRequests = await sql`
+          SELECT title, type, status FROM requests
+          WHERE business = ${String(biz.id)}
+          ORDER BY created_at DESC
+          LIMIT 10
+        `;
 
-    let response = await client.messages.create({
-      model: MODEL,
-      max_tokens: 2048,
-      system,
-      messages,
-      tools: [FILE_REQUEST_TOOL],
-    });
+        const system = buildSystemPrompt(biz, recentRequests);
+        const messages = [
+          ...history.map((m) => ({ role: m.role, content: m.content })),
+          { role: "user", content: userMessage },
+        ];
 
-    let iterations = 0;
-    while (response.stop_reason === "tool_use" && iterations < MAX_TOOL_ITERATIONS) {
-      iterations++;
-      const toolUseBlocks = response.content.filter((b) => b.type === "tool_use");
-      messages.push({ role: "assistant", content: response.content });
+        const client = new Anthropic();
+        const filedRequests = [];
+        let fullReply = "";
+        let iterations = 0;
 
-      const toolResults = [];
-      for (const block of toolUseBlocks) {
-        if (block.name === "file_request") {
-          const { title, type } = block.input;
-          const [row] = await sql`
-            INSERT INTO requests (business, title, type, status)
-            VALUES (${String(biz.id)}, ${title}, ${type}, ${"Requested"})
-            RETURNING id, title, type, status, created_at
-          `;
-          filedRequests.push(row);
+        while (true) {
+          const anthropicStream = client.messages.stream(
+            { model: MODEL, max_tokens: 2048, system, messages, tools: [FILE_REQUEST_TOOL] },
+            { signal: req.signal }
+          );
 
-          if (process.env.SLACK_WEBHOOK_URL) {
-            const webhookUrl = process.env.SLACK_WEBHOOK_URL;
-            const text = `New ${type} request from ${biz.name} (via Fort): ${title}`;
-            after(() =>
-              fetch(webhookUrl, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ text }),
-              }).catch((err) => console.error("Slack webhook failed:", err))
-            );
-          }
-
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id,
-            content: `Filed request #${row.id}: "${title}" (${type}).`,
+          anthropicStream.on("text", (delta) => {
+            fullReply += delta;
+            send({ type: "text_delta", text: delta });
           });
+
+          const finalMessage = await anthropicStream.finalMessage();
+
+          if (finalMessage.stop_reason !== "tool_use" || iterations >= MAX_TOOL_ITERATIONS) break;
+          iterations++;
+
+          const toolUseBlocks = finalMessage.content.filter((b) => b.type === "tool_use");
+          messages.push({ role: "assistant", content: finalMessage.content });
+
+          const toolResults = [];
+          for (const block of toolUseBlocks) {
+            if (block.name === "file_request") {
+              const { title, type } = block.input;
+              send({ type: "tool_step", tool: "file_request", status: "start", input: block.input });
+
+              const [row] = await sql`
+                INSERT INTO requests (business, title, type, status)
+                VALUES (${String(biz.id)}, ${title}, ${type}, ${"Requested"})
+                RETURNING id, title, type, status, created_at
+              `;
+              filedRequests.push(row);
+
+              if (process.env.SLACK_WEBHOOK_URL) {
+                const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+                const text = `New ${type} request from ${biz.name} (via Fort): ${title}`;
+                after(() =>
+                  fetch(webhookUrl, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ text }),
+                  }).catch((err) => console.error("Slack webhook failed:", err))
+                );
+              }
+
+              send({ type: "tool_step", tool: "file_request", status: "done", input: block.input, result: row });
+
+              toolResults.push({
+                type: "tool_result",
+                tool_use_id: block.id,
+                content: `Filed request #${row.id}: "${title}" (${type}).`,
+              });
+            }
+          }
+          messages.push({ role: "user", content: toolResults });
         }
+
+        const reply = fullReply.trim() || "Got it.";
+
+        await sql`
+          INSERT INTO fort_messages (business_id, role, content) VALUES (${String(biz.id)}, ${"user"}, ${userMessage})
+        `;
+        await sql`
+          INSERT INTO fort_messages (business_id, role, content) VALUES (${String(biz.id)}, ${"assistant"}, ${reply})
+        `;
+
+        send({ type: "done", reply, filedRequests });
+        controller.close();
+      } catch (err) {
+        if (err?.name !== "AbortError") {
+          console.error("POST /api/fort stream failed:", err);
+          try { send({ type: "error", message: "Fort couldn't respond" }); } catch {}
+        }
+        controller.close();
       }
-      messages.push({ role: "user", content: toolResults });
+    },
+  });
 
-      response = await client.messages.create({
-        model: MODEL,
-        max_tokens: 2048,
-        system,
-        messages,
-        tools: [FILE_REQUEST_TOOL],
-      });
-    }
-
-    const reply = response.content
-      .filter((b) => b.type === "text")
-      .map((b) => b.text)
-      .join("\n")
-      .trim() || "Got it.";
-
-    await sql`
-      INSERT INTO fort_messages (business_id, role, content) VALUES (${String(biz.id)}, ${"user"}, ${userMessage})
-    `;
-    await sql`
-      INSERT INTO fort_messages (business_id, role, content) VALUES (${String(biz.id)}, ${"assistant"}, ${reply})
-    `;
-
-    return Response.json({ reply, filedRequests });
-  } catch (err) {
-    console.error("POST /api/fort failed:", err);
-    return Response.json({ error: "Fort couldn't respond" }, { status: 500 });
-  }
+  return new Response(stream, { headers: { "Content-Type": "application/x-ndjson" } });
 }
