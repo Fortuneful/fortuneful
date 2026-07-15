@@ -12,6 +12,7 @@ const T = {
 };
 
 const SERVICES = ["Website", "Social Posts", "Media Buying", "Delivery App Management", "Email & SMS"];
+const BUSINESS_TYPES = ["Restaurant", "Retail / E-commerce", "Beauty & Fragrance", "Health & Supplements", "Services", "Other"];
 
 const inputStyle = {
   width: "100%", background: T.raised, border: `1px solid ${T.border}`, borderRadius: 9,
@@ -23,7 +24,7 @@ export default function Onboarding() {
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [f, setF] = useState({ name: "", owner: "", phone: "", address: "", services: [] });
+  const [f, setF] = useState({ name: "", owner: "", phone: "", address: "", services: [], business_type: "Restaurant" });
 
   // If they already onboarded, skip straight to the dashboard
   useEffect(() => {
@@ -80,9 +81,15 @@ export default function Onboarding() {
                 <div style={{ fontSize: 12.5, fontWeight: 600, color: T.sub, marginBottom: 6 }}>Phone</div>
                 <input style={inputStyle} placeholder="(___) ___-____" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} />
               </label>
-              <label style={{ display: "block", marginBottom: 20 }}>
+              <label style={{ display: "block", marginBottom: 14 }}>
                 <div style={{ fontSize: 12.5, fontWeight: 600, color: T.sub, marginBottom: 6 }}>Address</div>
                 <input style={inputStyle} placeholder="Street, city, state" value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} />
+              </label>
+              <label style={{ display: "block", marginBottom: 20 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: T.sub, marginBottom: 6 }}>What kind of business?</div>
+                <select style={inputStyle} value={f.business_type} onChange={(e) => setF({ ...f, business_type: e.target.value })}>
+                  {BUSINESS_TYPES.map((o) => <option key={o} value={o}>{o}</option>)}
+                </select>
               </label>
 
               <button

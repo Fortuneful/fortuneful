@@ -1,4 +1,5 @@
 import { auth } from "@clerk/nextjs/server";
+import { after } from "next/server";
 import { neon } from "@neondatabase/serverless";
 
 async function getBusiness(sql, userId) {
@@ -52,11 +53,14 @@ export async function POST(req) {
     const message = "New " + type + " request from " + biz.name + ": " + title;
 
     if (process.env.SLACK_WEBHOOK_URL) {
-      fetch(process.env.SLACK_WEBHOOK_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: message }),
-      }).catch(() => {});
+      const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+      after(() =>
+        fetch(webhookUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: message }),
+        }).catch((err) => console.error("Slack webhook failed:", err))
+      );
     }
 
     return Response.json(row, { status: 201 });
